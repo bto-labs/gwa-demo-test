@@ -1,7 +1,5 @@
 ---
-# GWA Claude Code - Thin Caller Workflow
-# This workflow is copied to target repositories by onboard-repo.sh
-# It calls the reusable workflows in jaybrto/github-workflow-agents
+# GWA Claude Code - Thin Caller Workflow with Project Triggers
 name: GWA Claude Code
 
 "on":
@@ -9,6 +7,8 @@ name: GWA Claude Code
     types: [opened, reopened, synchronize]
   issue_comment:
     types: [created, edited]
+  projects_v2_item:
+    types: [created, edited, deleted, archived, restored, reordered]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -16,11 +16,26 @@ name: GWA Claude Code
         required: true
 
 env:
-  # These are set by onboard-repo.sh
-  GWA_POD: gwa-jaybrto-gwa-demo-test-0
-  GWA_NAMESPACE: gwa-jaybrto-gwa-demo-test
+  GWA_POD: gwa-runner-0
+  GWA_NAMESPACE: default
 
 jobs:
+  # Handle project column changes
+  project-change:
+    if: github.event_name == 'projects_v2_item'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log project event
+        run: |
+          echo "🎯 Project event detected!"
+          echo "Action: ${{ github.event.action }}"
+          echo "Project: ${{ github.event.projects_v2_item.project_node_id }}"
+          echo "Item: ${{ github.event.projects_v2_item.node_id }}"
+          
+      - name: Notify workflow triggered
+        run: |
+          echo "✅ projects_v2_item webhook is working for org projects!"
+
   # Determine context and call orchestrator for PR events and @claude comments
   orchestrate:
     if: >
@@ -29,17 +44,26 @@ jobs:
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, '@claude'))
-    uses: jaybrto/github-workflow-agents/.github/workflows/gwa-orchestrate.yml@main
-    with:
-      pod_name: ${{ vars.GWA_POD || 'gwa-jaybrto-github-workflow-agents-0' }}
-      namespace: ${{ vars.GWA_NAMESPACE || 'gwa-jaybrto-github-workflow-agents' }}
-      pr_number: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
-      trigger: ${{ github.event_name == 'pull_request' && 'pr_event' || github.event_name == 'issue_comment' && 'comment' || 'manual' }}
-      branch: ${{ github.head_ref || '' }}
-      comment: ${{ github.event.comment.body || '' }}
-      actor: ${{ github.actor }}
-    secrets:
-      KUBECONFIG_DATA: ${{ secrets.GWA_KUBECONFIG }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup kubeconfig
+        env:
+          KUBECONFIG_DATA: ${{ secrets.GWA_KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+      - name: Run GWA orchestrator
+        env:
+          POD: ${{ vars.GWA_POD || 'gwa-runner-0' }}
+          NAMESPACE: ${{ vars.GWA_NAMESPACE || 'default' }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
+          TRIGGER: ${{ github.event_name }}
+          BRANCH: ${{ github.head_ref || '' }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Would run: kubectl exec -n $NAMESPACE $POD -- gwa-orchestrate --pr $PR --repo $REPO"
 
   # Handle @claude-answer: responses
   respond:
@@ -47,12 +71,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '@claude-answer:')
-    uses: jaybrto/github-workflow-agents/.github/workflows/gwa-respond.yml@main
-    with:
-      pod_name: ${{ vars.GWA_POD || 'gwa-jaybrto-github-workflow-agents-0' }}
-      namespace: ${{ vars.GWA_NAMESPACE || 'gwa-jaybrto-github-workflow-agents' }}
-      pr_number: ${{ github.event.issue.number }}
-      comment: ${{ github.event.comment.body }}
-      actor: ${{ github.actor }}
-    secrets:
-      KUBECONFIG_DATA: ${{ secrets.GWA_KUBECONFIG }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log response
+        run: echo "Would handle @claude-answer response"
